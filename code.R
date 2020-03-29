@@ -1,7 +1,9 @@
 
 # libraries ---------------------------------------------------------------
 
-pacman::p_load(tidyverse)
+pacman::p_load(tidyverse,
+               furrr,
+               patchwork)
 
 
 # Pseudocode --------------------------------------------------------------
@@ -12,7 +14,7 @@ pacman::p_load(tidyverse)
 # Epic pity timer: 10
 # Legendary pity timer: 40
 # Include guaranteed legendary in first 10 packs
-# Does a pity timer card take the place of 
+# How does the pity timer card replace one of the other cards?
 
 # Each pack opens
 # 1 card: Draw a rare or greater based on marginal prob of drawing rare or greater
@@ -21,6 +23,8 @@ pacman::p_load(tidyverse)
 # Add the number of each card rarity to a total counter
 # Function takes as input the # of cards in each rarity
 
+# Make a data frame that has a row for every pack opened and a column for the number
+# of cards in each rarity. Use to make plotts and such
 
 # Probability calculations ------------------------------------------------
 # Looking at the data on the wiki, the percentage of total for the rarities is
@@ -43,17 +47,226 @@ marg_rare_perc <- rare_cards / non_common_total
 marg_epic_perc <- epic_cards / non_common_total
 marg_legendary_perc <- legendary_cards / non_common_total
 
+
+
 # Functions ---------------------------------------------------------------
-openPack <- function(epic.pity.timer,
-                     legendary.pity.timer) {
-  dedicated_good_drop <- rmultinom(1, 1, prob = c(marg_rare_perc,
-                                                  marg_epic_perc,
-                                                  marg_legendary_perc))
-  if (epic.pity.timer == 10) {
-    
-  }
+openPack <- function(num.commons,
+                     num.rares,
+                     num.epics,
+                     num.legendaries) {
   
-  if (legendary.pity.timer == 40) {
+  # Data frame to hold data
+  df <- data.frame(commons = NA,
+                   rares = NA,
+                   epics = NA,
+                   legendaries = NA,
+                   common_cumsum = NA,
+                   rare_cumsum = NA,
+                   epic_cumsum = NA,
+                   legendary_cumsum = NA)
+  
+  # Get full number in set
+  num.set <- num.commons + num.rares + num.epics + num.legendaries
+  # Set timers
+  epic.pity.timer <- 0
+  legendary.pity.timer <- 30
+  i <- 1
+  # Loop for pack opening
+  while (sum(df$commons, na.rm = TRUE) < num.commons |
+         sum(df$rares, na.rm = TRUE) < num.rares |
+         sum(df$epics, na.rm = TRUE) < num.epics |
+         sum(df$legendaries, na.rm = TRUE) < num.legendaries) {
     
-  }
-}
+    all_cards <- rmultinom(1, 5, prob = c(common_perc,
+                                      rare_perc,
+                                      epic_perc,
+                                      legendary_perc))
+    # If all cards are common generate better card
+    if (all_cards[2,1] == 0 &
+        all_cards[3, 1] == 0 &
+        all_cards[4, 1] == 0) {
+      
+      dedicated_good_drop <- rmultinom(1, 1, prob = c(0,
+                                                      marg_rare_perc,
+                                                      marg_epic_perc,
+                                                      marg_legendary_perc))
+      
+      dedicated_good_drop[1, 1] <- -1
+      
+      all_cards <- dedicated_good_drop + all_cards
+    }
+
+    
+    
+    
+    # Increment pity timer
+    if (all_cards[3, 1] == 0) {
+      epic.pity.timer <- epic.pity.timer + 1
+    } else {
+      epic.pity.timer <- 0
+    }
+    
+    if (all_cards[4, 1] == 0) {
+      legendary.pity.timer <- legendary.pity.timer + 1
+    } else {
+      legendary.pity.timer <- 0
+    }
+    
+    # Activate pity timer
+    if (epic.pity.timer == 10) {
+      # Want to replaced one of the common or rare cards (assumed behavior)
+      num_rare_common <- all_cards[1, 1] + all_cards[2, 1]
+      # Pick whether common or rare is replaced
+      replace <- rmultinom(1, 1, prob = c(all_cards[1, 1] / num_rare_common,
+                                          all_cards[2, 1] / num_rare_common,
+                                          0,
+                                          0))
+      # Subtract the replaced card
+      all_cards <- all_cards + -replace
+      
+      all_cards[3, 1] <- all_cards[3, 1] + 1
+      
+      # Reset timer
+      epic.pity.timer <- 0
+    } # End epic pity timer
+    
+    if (legendary.pity.timer == 40) {
+      
+      # Want to replaced one of the common or rare cards (assumed behavior)
+      num_rare_common <- all_cards[1, 1] + all_cards[2, 1]
+      # Pick whether common or rare is replaced
+      replace <- rmultinom(1, 1, prob = c(all_cards[1, 1] / num_rare_common,
+                                          all_cards[2, 1] / num_rare_common,
+                                          0,
+                                          0))
+      # Subtract the replaced card
+      all_cards <- all_cards + -replace
+      # Add legendary
+      all_cards[4, 1] <- all_cards[4, 1] + 1
+      #Reset timer
+      legendary.pity.timer <- 0
+    } # End legendary pity timer
+    
+    # Add to data frame
+    df[i, 1:4] <- t(all_cards)
+    df <- df %>% 
+      mutate(common_cumsum = accumulate(commons, sum),
+             rare_cumsum  = accumulate(rares, sum),
+             epic_cumsum = accumulate(epics, sum),
+             legendary_cumsum = accumulate(legendaries, sum))
+    i <- i + 1
+
+  } # End pack opening loop
+  
+  df <- df %>% 
+    mutate(common_perc = common_cumsum / num.commons,
+           rare_perc = rare_cumsum / num.rares,
+           epic_perc = epic_cumsum / num.epics,
+           legendary_perc = legendary_cumsum / num.legendaries) %>% 
+    
+    mutate(common_perc = ifelse(common_perc > 1, 1, common_perc),
+           rare_perc = ifelse(rare_perc > 1, 1, rare_perc),
+           epic_perc = ifelse(epic_perc > 1, 1, epic_perc),
+           legendary_perc = ifelse(legendary_perc > 1, 1, legendary_perc),
+           set_perc = ((common_perc * num.commons) +
+             (rare_perc * num.rares) +
+             (epic_perc * num.epics) +
+             (legendary_perc * num.legendaries)) / num.set,
+           excess_commons = common_cumsum - num.commons,
+           excess_rares = rare_cumsum - num.rares,
+           excess_epics = epic_cumsum - num.epics,
+           excess_legendaries = legendary_cumsum - num.legendaries) %>% 
+    
+    mutate(excess_commons = ifelse(excess_commons < 0, 0, excess_commons),
+           excess_rares = ifelse(excess_rares < 0, 0, excess_rares),
+           excess_epics = ifelse(excess_epics < 0, 0, excess_epics),
+           excess_legendaries = ifelse(excess_legendaries < 0, 0, excess_legendaries)) %>% 
+    
+    mutate(total_dust =  excess_commons * 5 +
+                         excess_rares * 20 +
+                         excess_epics * 100 +
+                         excess_legendaries * 400,
+           num_packs = 1:nrow(.)) %>% 
+    
+    select(-contains("excess"))
+  
+  return(df)
+} #end function
+
+
+#  Simulate ---------------------------------------------------------------
+
+# Number of cards in Descent of Dragons
+num_commons <- 98
+num_rares <- 72
+num_epics <- 54
+num_legendaries <- 28
+
+set_nums <- c(num_commons,
+              num_rares,
+              num_epics,
+              num_legendaries)
+
+num_sims <- 500
+sim_list <- rep(list(set_nums), num_sims)
+
+# Set up parallel simulations
+plan(multiprocess)
+
+# Simulate pack opening until set is complete
+out <- future_map(sim_list, function(.x) {
+  out <- openPack(
+    num.commons = .x[1],
+    num.rares = .x[2],
+    num.epics = .x[3],
+    num.legendaries = .x[4]
+  )
+  return(out)
+},
+.progress = TRUE) %>% 
+  bind_rows(.id = "sim") %>% 
+  mutate(sim = as.numeric(sim))
+
+
+
+# Summaries ---------------------------------------------------------------
+
+# Average number of packs till set completion
+set_perc_plot <- ggplot(out, aes(x = num_packs, y = set_perc)) +
+  geom_line(aes(group = sim), alpha = 0.25, colour = "grey") +
+  geom_smooth(se = TRUE) +
+  theme_bw() +
+  scale_x_continuous(breaks = seq(0, 250, 25),
+                     labels = seq(0, 250, 25),
+                     limits = c(0, 250)) +
+  geom_hline(yintercept = c(0.25, 0.5, 0.75, 1.0), linetype = "dashed") +
+  geom_vline(xintercept = c(25, 50, 75, 100), linetype = "dashed") +
+  labs(x = "Number of packs opened", y = "Percent of set obtained")
+
+dust_plot <- ggplot(out, aes(x = num_packs, y = total_dust)) +
+  geom_line(aes(group = sim), alpha = 0.25, colour = "grey") +
+  geom_smooth(se = TRUE) +
+  theme_bw() +
+  scale_y_continuous(breaks = seq(0, 10000, 2500),
+                     labels = seq(0, 10000, 2500),
+                     limits = c(0, 10000)) +
+  scale_x_continuous(breaks = seq(0, 200, 25),
+                     labels = seq(0, 200, 25),
+                     limits = c(0, 200)) +
+  labs(x = "Number of packs opened", y = "Dust from disenchanting duplicates")
+
+p <- set_perc_plot + dust_plot
+
+p
+
+total_packs_opened <- out %>%
+  group_by(sim) %>%
+  count() 
+mean(total_packs_opened$n)
+
+out %>% 
+  summarise(common_prob = sum(commons) / sum(commons, rares, epics, legendaries),
+            rare_prob = sum(rares) / sum(commons, rares, epics, legendaries),
+            epic_prob = sum(epics) / sum(commons, rares, epics, legendaries),
+            legendary_prob = sum(legendaries) / sum(commons, rares, epics, legendaries))
+
